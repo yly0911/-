@@ -1863,10 +1863,14 @@ async function initGesture() {
   if (!landmarker) {
     setCamStatus("正在加载手势库…");
     try {
-      const lib = await import(/* @vite-ignore */ CONFIG.mp.bundle);
-      const fileset = await lib.FilesetResolver.forVisionTasks(CONFIG.mp.wasm);
+      const lib = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
+
+// 2. 初始化 FilesetResolver 时，指向 CDN 上的 wasm 目录
+      const fileset = await lib.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+
+// 3. 模型文件可以继续使用本地相对路径（如果文件在根目录）
       landmarker = await lib.HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: CONFIG.mp.model },
+        baseOptions: { modelAssetPath: "./hand_landmarker.task" },
         runningMode: "VIDEO",
         numHands: 1,
         minHandDetectionConfidence: 0.35,
