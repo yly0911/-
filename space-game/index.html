@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>太空躲避外星人</title>
+<link rel="stylesheet" href="style.css" />
+<!-- 与 game.js 中 CONFIG.mp.bundle 保持一致 -->
+<link rel="modulepreload" href="../vendor/mediapipe/vision_bundle.mjs" />
+</head>
+<body>
+  <!-- 星空背景：所有页面共用同一张画布 -->
+  <canvas id="bg"></canvas>
+
+  <!-- 全屏手势光标层：画虚拟光标，pointer-events:none 不拦截点击 -->
+  <canvas id="cursorLayer"></canvas>
+
+  <main id="app">
+    <!-- ============ 首页 ============ -->
+    <section id="home" class="screen">
+      <h1 class="game-title">太空躲避外星人</h1>
+      <p class="subtitle">右手食指控飞船，握拳放出脉冲。没有摄像头也能玩：鼠标 / ← → / 空格。</p>
+      <canvas id="homePreview"></canvas>
+      <button class="btn primary big" id="toLevels" type="button">开始游戏</button>
+      <p class="hint">手势控全流程 · 无摄像头时用 ← → / 鼠标 / 点按钮</p>
+    </section>
+
+    <!-- ============ 选关 ============ -->
+    <section id="levels" class="screen hidden">
+      <h2 class="screen-title">选择关卡</h2>
+      <p class="subtitle">共 10 关，每关 3 波；波次推进时速度与敌人类型都会升级，通关自动解锁下一关</p>
+      <div id="levelGrid" class="level-grid"></div>
+      <button class="btn" id="backHome" type="button">返回首页</button>
+    </section>
+
+    <!-- ============ 游戏 ============ -->
+    <section id="game" class="screen hidden">
+      <div class="hud">
+        <div class="hud-box"><span class="hud-label">分数</span><span class="hud-val" id="hudScore">0</span></div>
+        <div class="hud-box combo" id="hudComboBox"><span class="hud-label">连击</span><span class="hud-val" id="hudCombo">×1</span></div>
+        <div class="hud-box"><span class="hud-label">生命</span><span class="hud-val" id="hudLives">❤❤❤</span></div>
+        <div class="hud-box"><span class="hud-label">进度</span><span class="hud-val" id="hudLevel">1-1</span></div>
+      </div>
+
+      <div class="field-wrap">
+        <canvas id="field"></canvas>
+        <div id="fieldTimer">01:00</div>
+        <div id="pauseTag" class="hidden">已 暂 停</div>
+        <button id="btnPulse" class="pulse-btn" type="button" title="释放脉冲（空格 / 点击场地 / 握拳）">
+          <span class="pb-main">脉冲</span>
+          <span class="pb-key">空格</span>
+        </button>
+      </div>
+
+      <div class="controls">
+        <button class="btn primary" id="btnStart" type="button">开始游戏</button>
+        <button class="btn" id="btnPause" type="button" disabled>暂停</button>
+        <button class="btn" id="btnCam" type="button">手势 · 开</button>
+      </div>
+      <p class="hint" id="gameHint">食指 / ← → / 鼠标 移动 · 空格 / 点击场地 / 握拳 释放脉冲 · P 暂停</p>
+    </section>
+
+    <!-- ============ 结果弹层 ============ -->
+    <div id="overlay" class="hidden">
+      <div class="result-card">
+        <h2 id="resultTitle">游戏结束</h2>
+        <p id="resultDetail"></p>
+        <div id="resultActions" class="result-actions"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ 手势回看小窗 ============ -->
+  <div id="camWrap" class="hidden">
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="skel" width="320" height="180"></canvas>
+    <div id="handTags"><span id="tagHand" class="hand-tag">手</span></div>
+    <div id="camStatus">手势未连接</div>
+  </div>
+
+  <script type="module" src="game.js"></script>
+</body>
+</html>
