@@ -7,12 +7,10 @@
 
 const CONFIG = {
   mp: {
-    // 1. 库文件改为 CDN
-    bundle: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs",
-    // 2. WASM 环境改为 CDN
-    wasm: "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm",
-    // 3. 模型文件：因为你已经把它传到根目录了，直接用相对路径就行
-    model: "./hand_landmarker.task" 
+    // 全部走仓库内自带资源：本地 http 与线上 Pages 都能直接加载，不依赖 CDN
+    bundle: "../vendor/mediapipe/vision_bundle.mjs",
+    wasm: "../vendor/mediapipe/wasm",
+    model: "../vendor/models/hand_landmarker.task",
   },
   camera: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 30, max: 30 } },
   startLives: 3,
@@ -1863,14 +1861,10 @@ async function initGesture() {
   if (!landmarker) {
     setCamStatus("正在加载手势库…");
     try {
-      const lib = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs");
-
-// 2. 初始化 FilesetResolver 时，指向 CDN 上的 wasm 目录
-      const fileset = await lib.FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
-
-// 3. 模型文件可以继续使用本地相对路径（如果文件在根目录）
+      const lib = await import(CONFIG.mp.bundle);
+      const fileset = await lib.FilesetResolver.forVisionTasks(CONFIG.mp.wasm);
       landmarker = await lib.HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: "./hand_landmarker.task" },
+        baseOptions: { modelAssetPath: CONFIG.mp.model },
         runningMode: "VIDEO",
         numHands: 1,
         minHandDetectionConfidence: 0.35,
