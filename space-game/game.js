@@ -18,6 +18,8 @@ const CONFIG = {
   shipEdge: 0.05,        // 飞船左右极限
   shipY: 0.84,           // 飞船纵向位置（0 顶 / 1 底）
   handTimeoutMs: 320,    // 手离开 320ms 后交还键盘/鼠标控制
+  /* 手势链路：只在新视频帧上推理；平滑时间常数直接决定跟手延迟 */
+  gesture: { minIntervalMs: 8, tau: 0.014, cursorTau: 0.012, deadzone: 0.003 },
   combo: { window: 3.6, perStep: 5, max: 5 },   // 每 5 连击 +1 倍率，最高 ×5
   pulse: { cost: 50, max: 100, regen: 4.2, radius: 0.33, speed: 1.35 },
 };
@@ -1713,7 +1715,35 @@ let lastDetect = 0;
 let gestureLoading = false;
 let gestureEnabled = true;
 let gestureError = false;
-let detectFrame = 0;
+let frameTick = 0;          // 摄像头已产出多少帧
+let frameStamp = 0;         // 最近一帧视频的显示时间戳
+let lastTickSeen = -1;      // 上一帧已推理过的 frameTick
+let lastStamp = 0;          // 传给 MediaPipe 的时间戳，必须严格递增
+let vfcHandle = 0;
+
+/* 用 requestVideoFrameCallback 拿到真实帧节拍：同一帧不重复推理 */
+function watchVideoFrames() {
+  if (typeof video.requestVideoFrameCallback !== "function") return;
+  if (vfcHandle) return;
+  const step = () => {
+    vfcHandle = video.requestVideoFrameCallback((now) => {
+      frameTick++;
+      frameStamp = now;
+      step();
+    });
+  };
+  step();
+}
+
+function unwatchVideoFrames() {
+  if (vfcHandle && typeof video.cancelVideoFrameCallback === "function") {
+    video.cancelVideoFrameCallback(vfcHandle);
+  }
+  vfcHandle = 0;
+  frameTick = 0;
+  lastTickSeen = -1;
+  frameStamp = 0;
+}
 
 function setCamStatus(text, warn) {
   const node = $("camStatus");
@@ -1800,6 +1830,7 @@ async function initCamera() {
     video.setAttribute("playsinline", "");
     await video.play();
     camReady = true;
+    watchVideoFrames();
     $("camWrap").classList.remove("off");
     setCamStatus("把手放进画面");
     return "ok";
@@ -1814,6 +1845,7 @@ async function initCamera() {
 }
 
 function stopCamera() {
+  unwatchVideoFrames();
   if (camStream) {
     camStream.getTracks().forEach(t => t.stop());
     camStream = null;
@@ -1845,6 +1877,20 @@ function markGestureUnavailable(reason) {
   setBtnCam();
 }
 
+async function createLandmarker(lib, fileset, delegate) {
+  return lib.HandLandmarker.createFromOptions(fileset, {
+    baseOptions: {
+      modelAssetPath: CONFIG.mp.model,
+      ...(delegate ? { delegate } : {}),
+    },
+    runningMode: "VIDEO",
+    numHands: 1,
+    minHandDetectionConfidence: 0.35,
+    minHandPresenceConfidence: 0.35,
+    minTrackingConfidence: 0.35,
+  });
+}
+
 async function initGesture() {
   if (!gestureEnabled || gestureLoading || camReady) return;
   gestureLoading = true;
@@ -1863,14 +1909,13 @@ async function initGesture() {
     try {
       const lib = await import(CONFIG.mp.bundle);
       const fileset = await lib.FilesetResolver.forVisionTasks(CONFIG.mp.wasm);
-      landmarker = await lib.HandLandmarker.createFromOptions(fileset, {
-        baseOptions: { modelAssetPath: CONFIG.mp.model },
-        runningMode: "VIDEO",
-        numHands: 1,
-        minHandDetectionConfidence: 0.35,
-        minHandPresenceConfidence: 0.35,
-        minTrackingConfidence: 0.35,
-      });
+      // GPU 推理单帧明显快于 CPU；不支持时回退 CPU，保证弱设备也能用
+      try {
+        landmarker = await createLandmarker(lib, fileset, "GPU");
+      } catch (e) {
+        console.warn("GPU 推理不可用，回退 CPU：", e);
+        landmarker = await createLandmarker(lib, fileset, null);
+      }
     } catch (e) {
       console.warn("手势库加载失败：", e);
       stopCamera();
@@ -1895,18 +1940,33 @@ function fingerFolded(lm, tip, pip, mcp) {
 
 function detect(now) {
   if (!landmarker || !camReady || video.readyState < 2) return;
-  if (now - lastDetect < 22) return;
+
+  // 只在新视频帧上推理：同一帧重复送进模型只会白占主线程，结果是旧的
+  // 预览窗被隐藏时 rVFC 可能不再回调，超时后自动退回按 rAF 节流
+  const vfcLive = vfcHandle !== 0 && frameStamp > 0 && now - frameStamp < 200;
+  if (vfcLive) {
+    if (frameTick === lastTickSeen) return;
+  } else if (now - lastDetect < 33) {
+    return;
+  }
+  const since = now - lastDetect;
+  if (since < CONFIG.gesture.minIntervalMs) return;
   lastDetect = now;
-  detectFrame++;
+  if (vfcLive) lastTickSeen = frameTick;
+
+  // 时间戳必须严格递增，优先用视频帧自身的显示时间
+  let ts = vfcLive ? frameStamp : now;
+  if (!ts || ts <= lastStamp) ts = lastStamp + 1;
+  lastStamp = ts;
 
   let res;
   try {
-    res = landmarker.detectForVideo(video, now);
+    res = landmarker.detectForVideo(video, ts);
   } catch (e) {
     return;
   }
 
-  if (detectFrame % 3 === 0) skelCtx.clearRect(0, 0, skel.width, skel.height);
+  skelCtx.clearRect(0, 0, skel.width, skel.height);
   const lms = res.landmarks || [];
 
   if (!lms.length) {
@@ -1923,11 +1983,23 @@ function detect(now) {
   const tipY = clamp01(lm[8].y);
   const anchorX = clamp01(1 - lm[5].x);
   handSeenAt = now;
-  handShipX += (anchorX - handShipX) * 0.52;
+
+  // 指数平滑改成按时间常数计算，不再写死每帧系数：
+  // 摄像头掉到 20fps 时跟手速度不变，30fps 时延迟从 ~133ms 降到 ~35ms
+  const dt = Math.min(0.2, Math.max(0.001, since / 1000));
+  const kShip = 1 - Math.exp(-dt / CONFIG.gesture.tau);
+  const kCursor = 1 - Math.exp(-dt / CONFIG.gesture.cursorTau);
+  if (Math.abs(anchorX - handShipX) > CONFIG.gesture.deadzone) {
+    handShipX += (anchorX - handShipX) * kShip;
+  }
   handX = handShipX;
 
-  handCursor.x += (tipX - handCursor.x) * 0.7;
-  handCursor.y += (tipY - handCursor.y) * 0.7;
+  if (Math.abs(tipX - handCursor.x) > CONFIG.gesture.deadzone) {
+    handCursor.x += (tipX - handCursor.x) * kCursor;
+  }
+  if (Math.abs(tipY - handCursor.y) > CONFIG.gesture.deadzone) {
+    handCursor.y += (tipY - handCursor.y) * kCursor;
+  }
   handCursor.seenAt = now;
 
   // 握拳：食指收拢，且另外三指里至少两指收拢
@@ -1956,7 +2028,7 @@ function detect(now) {
     handCursor.downAt = null;
   }
 
-  if (detectFrame % 3 === 0) drawSkeleton(lm, "#3ee6ff");
+  drawSkeleton(lm, "#3ee6ff");
   $("tagHand").classList.add("on");
   if (game.screen === "game") {
     setCamStatus(isFist ? "手势已连接 · 握拳放脉冲" : "手势已连接 · 食指控船");
